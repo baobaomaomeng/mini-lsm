@@ -15,7 +15,7 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use crate::{
     iterators::{merge_iterator::MergeIterator, StorageIterator},
@@ -31,7 +31,12 @@ pub struct LsmIterator {
 
 impl LsmIterator {
     pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
-        Ok(Self { inner: iter })
+        let mut lsm = Self { inner: iter };
+        assert!(lsm.is_valid()); //理论来说，MergeIterator::new()得到的全是有效的迭代器
+        if lsm.value().is_empty() {
+            let _ = lsm.next();
+        }
+        Ok(lsm)
     }
 }
 
@@ -39,19 +44,23 @@ impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.inner.is_valid()
     }
 
     fn key(&self) -> &[u8] {
-        unimplemented!()
+        self.inner.key().raw_ref()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.inner.value()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        let _ = self.inner.next();
+        if self.inner.is_valid() && self.inner.value().is_empty() {
+            return self.next();
+        }
+        Ok(())
     }
 }
 
@@ -79,18 +88,33 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
         Self: 'a;
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        //注意需要把is_valid放在前面，因为has_errored为true时，is_valid会触发panic
+        !self.has_errored && self.iter.is_valid()
     }
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        if !self.is_valid() {
+            panic!("invalid access to the underlying iterator");
+        }
+        self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        if !self.is_valid() {
+            panic!("invalid access to the underlying iterator");
+        }
+        self.iter.value()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if !self.is_valid() {
+            bail!("the iterator is tainted");
+        }
+        let result = self.iter.next();
+        if result.is_err() {
+            self.has_errored = true;
+            return result;
+        }
+        result
     }
 }

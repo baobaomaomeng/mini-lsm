@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use anyhow::{Ok, Result};
 use bytes::Bytes;
-use crossbeam_skiplist::map::Iter;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
 use crate::block::Block;
@@ -31,6 +30,8 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::merge_iterator::MergeIterator;
+use crate::iterators::StorageIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::{self, MemTable};
@@ -336,7 +337,7 @@ impl LsmStorageInner {
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        self.put(_key, &[])
+        self.put(_key, b"")
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
@@ -389,6 +390,20 @@ impl LsmStorageInner {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        unimplemented!()
+        let guard = self.state.read();
+        let iter = guard.memtable.scan(_lower, _upper);
+        let mut iters = Vec::new();
+        iters.push(Box::new(iter));
+        for memtable in guard.imm_memtables.iter() {
+            let iter = memtable.scan(_lower, _upper);
+            iters.push(Box::new(iter));
+        }
+        for iter in iters.iter() {
+            println!("iter.VALUE(): {:?}", (*iter).value());
+        }
+        println!("iters size: {}", iters.len());
+        Ok(FusedIterator::new(LsmIterator::new(
+            MergeIterator::create(iters),
+        )?))
     }
 }
