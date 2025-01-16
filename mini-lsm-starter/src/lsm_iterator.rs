@@ -107,14 +107,16 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
     }
 
     fn next(&mut self) -> Result<()> {
-        if !self.is_valid() {
+        if self.has_errored {
             bail!("the iterator is tainted");
         }
-        let result = self.iter.next();
-        if result.is_err() {
-            self.has_errored = true;
-            return result;
+        if self.iter.is_valid() {
+            if let Err(e) = self.iter.next() {
+                println!("return error");
+                self.has_errored = true;
+                return Err(e);
+            }
         }
-        result
+        Ok(())
     }
 }

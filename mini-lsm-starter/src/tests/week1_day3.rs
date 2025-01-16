@@ -80,6 +80,7 @@ fn test_block_decode() {
     let block = generate_block();
     let encoded = block.encode();
     let decoded_block = Block::decode(&encoded);
+    println!("{} {}", block.offsets[1], block.offsets[2]);
     assert_eq!(block.offsets, decoded_block.offsets);
     assert_eq!(block.data, decoded_block.data);
 }
@@ -91,6 +92,7 @@ fn as_bytes(x: &[u8]) -> Bytes {
 #[test]
 fn test_block_iterator() {
     let block = Arc::new(generate_block());
+    println!("{}||{}", block.offsets[1], block.offsets[2]);
     let mut iter = BlockIterator::create_and_seek_to_first(block);
     for _ in 0..5 {
         for i in 0..num_of_keys() {

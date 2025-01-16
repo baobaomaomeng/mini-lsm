@@ -122,9 +122,8 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         if !current.1.is_valid() {
             if let Some(iter) = self.iters.pop() {
                 *current = iter;
-            } else {
-                return Ok(());
             }
+            return Ok(());
         }
         println!("current.1.key(): {:?}", current.1.key());
         //如果当前迭代器key小于下一个迭代器key，则交换
