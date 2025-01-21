@@ -100,7 +100,6 @@ impl BlockIterator {
         self.idx = index;
         let key_star = self.block.offsets[index] as usize;
         let value_star = self.get_key(key_star);
-        println!("{} || {}", key_star, value_star);
         self.get_value(value_star);
     }
 

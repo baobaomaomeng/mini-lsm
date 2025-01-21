@@ -33,7 +33,7 @@ impl Block {
     /// Note: You may want to recheck if any of the expected field is missing from your output
     pub fn encode(&self) -> Bytes {
         let mut buf = Vec::new();
-        buf.extend_from_slice(&self.data);
+        buf.put_slice(&self.data);
         // 将每个offset写入buf
         for offset in &self.offsets {
             buf.put_u16(*offset);
@@ -47,10 +47,8 @@ impl Block {
     pub fn decode(data: &[u8]) -> Self {
         // 从末尾读取offset数组的长度
         let num_offsets = (&data[data.len() - 2..]).get_u16() as usize;
-        println!("{} || {}", num_offsets, data.len());
         // 计算offset数组的起始位置
         let offsets_start = data.len() - 2 - num_offsets * 2;
-        println!("{}", offsets_start);
         // 提取数据部分
         let ans_data = data[..offsets_start].to_vec();
         // 提取并解析offset数组
@@ -63,5 +61,9 @@ impl Block {
             data: ans_data,
             offsets,
         }
+    }
+
+    pub fn get_size(&self) -> usize {
+        self.data.len() + self.offsets.len() * 2 + 2
     }
 }

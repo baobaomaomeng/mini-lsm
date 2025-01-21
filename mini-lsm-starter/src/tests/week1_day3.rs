@@ -92,7 +92,6 @@ fn as_bytes(x: &[u8]) -> Bytes {
 #[test]
 fn test_block_iterator() {
     let block = Arc::new(generate_block());
-    println!("{}||{}", block.offsets[1], block.offsets[2]);
     let mut iter = BlockIterator::create_and_seek_to_first(block);
     for _ in 0..5 {
         for i in 0..num_of_keys() {

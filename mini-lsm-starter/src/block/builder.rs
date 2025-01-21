@@ -1,23 +1,6 @@
-// Copyright (c) 2022-2025 Alex Chi Z
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use bytes::BufMut;
 
-use crate::key::{KeySlice, KeyVec};
+use crate::key::{KeyBytes, KeySlice, KeyVec};
 
 use super::Block;
 
@@ -36,20 +19,21 @@ pub struct BlockBuilder {
 impl BlockBuilder {
     /// Creates a new block builder.
     pub fn new(block_size: usize) -> Self {
-        return Self {
+        Self {
             offsets: vec![],
             data: vec![],
             block_size,
             first_key: KeyVec::new(),
-        };
+        }
     }
 
     /// Adds a key-value pair to the block. Returns false when the block is full.
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
         // 计算新条目的总大小
-        let entry_size = 4 + key.len() + value.len(); // key_len + key + value_len + value
-        let data_len = self.data.len();
+        let entry_size = 4 + key.len() as u64 + value.len() as u64; // key_len + key + value_len + value
+        let data_len = self.data.len() as u64;
+        let offsets_len = self.offsets.len() as u64 * 2;
         let mut add_entry = || {
             self.offsets.push(self.data.len() as u16);
             self.data.put_u16(key.len() as u16);
@@ -66,7 +50,7 @@ impl BlockBuilder {
         }
 
         // 检查是否超出块大小限制
-        if data_len + entry_size + 2 > self.block_size {
+        if data_len + offsets_len + 8 + entry_size > self.block_size as u64 {
             return false;
         }
         add_entry();
@@ -84,5 +68,9 @@ impl BlockBuilder {
             data: self.data,
             offsets: self.offsets,
         }
+    }
+
+    pub fn first_key(&self) -> KeyBytes {
+        self.first_key.clone().into_key_bytes()
     }
 }
