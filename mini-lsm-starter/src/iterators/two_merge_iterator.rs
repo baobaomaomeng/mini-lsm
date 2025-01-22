@@ -24,7 +24,8 @@ use super::StorageIterator;
 pub struct TwoMergeIterator<A: StorageIterator, B: StorageIterator> {
     a: A,
     b: B,
-    // Add fields as need
+    // true if mem_table, false if sstable
+    mem_table_or_sstable: bool,
 }
 
 impl<
@@ -32,8 +33,25 @@ impl<
         B: 'static + for<'a> StorageIterator<KeyType<'a> = A::KeyType<'a>>,
     > TwoMergeIterator<A, B>
 {
+    pub fn choose(&mut self) {
+        if !self.a.is_valid() {
+            self.mem_table_or_sstable = false;
+            return;
+        } else if !self.b.is_valid() {
+            self.mem_table_or_sstable = true;
+            return;
+        }
+        self.mem_table_or_sstable = self.a.key() <= self.b.key();
+    }
+
     pub fn create(a: A, b: B) -> Result<Self> {
-        unimplemented!()
+        let mut result = Self {
+            a,
+            b,
+            mem_table_or_sstable: true,
+        };
+        result.choose();
+        Ok(result)
     }
 }
 
@@ -45,18 +63,39 @@ impl<
     type KeyType<'a> = A::KeyType<'a>;
 
     fn key(&self) -> Self::KeyType<'_> {
-        unimplemented!()
+        if self.mem_table_or_sstable {
+            self.a.key()
+        } else {
+            self.b.key()
+        }
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        if self.mem_table_or_sstable {
+            self.a.value()
+        } else {
+            self.b.value()
+        }
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        if self.mem_table_or_sstable {
+            self.a.is_valid()
+        } else {
+            self.b.is_valid()
+        }
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        if self.a.is_valid() && self.b.is_valid() && self.a.key() == self.b.key() {
+            self.b.next()?;
+        }
+        if self.mem_table_or_sstable {
+            self.a.next()?;
+        } else {
+            self.b.next()?;
+        }
+        self.choose();
+        Ok(())
     }
 }

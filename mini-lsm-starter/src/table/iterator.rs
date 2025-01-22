@@ -20,11 +20,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::SsTable;
-use crate::{
-    block::BlockIterator,
-    iterators::StorageIterator,
-    key::{Key, KeySlice},
-};
+use crate::{block::BlockIterator, iterators::StorageIterator, key::KeySlice};
 
 /// An iterator over the contents of an SSTable.
 pub struct SsTableIterator {
@@ -54,18 +50,11 @@ impl SsTableIterator {
     /// Create a new iterator and seek to the first key-value pair which >= `key`.
     pub fn create_and_seek_to_key(table: Arc<SsTable>, key: KeySlice) -> Result<Self> {
         let mut idx = table.find_block_idx(key);
-        println!("idx: {}", idx);
-        if idx == table.num_of_blocks()
-            && Key::from_slice(table.block_meta[idx].last_key.raw_ref()) < key
-        {
-            return Err(anyhow::anyhow!("no more blocks"));
-        }
-        let block_iter = BlockIterator::create_and_seek_to_key(table.read_block_cached(idx)?, key);
-        if !block_iter.is_valid() {
+        let mut block_iter =
+            BlockIterator::create_and_seek_to_key(table.read_block_cached(idx)?, key);
+        if !block_iter.is_valid() && idx != table.num_of_blocks() - 1 {
             idx += 1;
-        }
-        if idx == table.num_of_blocks() {
-            return Err(anyhow::anyhow!("no more blocks"));
+            block_iter = BlockIterator::create_and_seek_to_first(table.read_block_cached(idx)?);
         }
         let iter = Self {
             table: table.clone(),
