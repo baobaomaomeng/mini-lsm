@@ -94,9 +94,21 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
         if let Some(current) = &self.current {
             current.1.is_valid()
         } else {
-            println!("self.current is None");
             false
         }
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        let mut sum = 0;
+        for iter in self.iters.iter() {
+            sum += iter.1.num_active_iterators();
+        }
+        sum += self
+            .current
+            .as_ref()
+            .map(|x| x.1.num_active_iterators())
+            .unwrap_or(0);
+        sum
     }
 
     fn next(&mut self) -> Result<()> {

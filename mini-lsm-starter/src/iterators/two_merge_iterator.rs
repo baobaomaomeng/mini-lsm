@@ -86,6 +86,10 @@ impl<
         }
     }
 
+    fn num_active_iterators(&self) -> usize {
+        self.a.num_active_iterators() + self.b.num_active_iterators()
+    }
+
     fn next(&mut self) -> Result<()> {
         if self.a.is_valid() && self.b.is_valid() && self.a.key() == self.b.key() {
             self.b.next()?;

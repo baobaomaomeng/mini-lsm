@@ -334,18 +334,17 @@ impl LsmStorageInner {
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        let data_len = _key.len() + _value.len();
-        if self.state.read().memtable.approximate_size() + data_len
-            > self.options.num_memtable_limit
-        {
+        let _ = self.state.read().memtable.put(_key, _value);
+        let approximate_size = self.state.read().memtable.approximate_size();
+        if approximate_size > self.options.target_sst_size {
             let state_lock = self.state_lock.lock();
-            if self.state.read().memtable.approximate_size() + data_len
-                > self.options.num_memtable_limit
-            {
-                let _ = self.force_freeze_memtable(&state_lock);
+            let guard = self.state.read();
+            if guard.memtable.approximate_size() >= self.options.target_sst_size {
+                drop(guard);
+                self.force_freeze_memtable(&state_lock)?;
             }
         }
-        self.state.read().memtable.put(_key, _value)
+        Ok(())
     }
 
     /// Remove a key from the storage by writing an empty value.
@@ -389,7 +388,33 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        unimplemented!()
+        let _ = self.state_lock.lock();
+        let imm_memtable = {
+            let guard = self.state.read();
+            let memtable_to_flush = guard
+                .imm_memtables
+                .last()
+                .expect("no imm memtables!")
+                .clone();
+            memtable_to_flush
+        };
+
+        let sst_id = self.next_sst_id();
+        let sst_path = self.path_of_sst(sst_id);
+        let mut builder = crate::table::SsTableBuilder::new(self.options.block_size);
+        imm_memtable.flush(&mut builder)?;
+        let sst = builder.build(sst_id, Some(self.block_cache.clone()), sst_path)?;
+
+        {
+            let mut guard = self.state.write();
+            let mut snapshot = guard.as_ref().clone();
+            snapshot.imm_memtables.pop();
+            snapshot.l0_sstables.insert(0, sst_id);
+            snapshot.sstables.insert(sst_id, Arc::new(sst));
+            *guard = Arc::new(snapshot);
+        }
+
+        Ok(())
     }
 
     pub fn new_txn(&self) -> Result<()> {
@@ -417,29 +442,35 @@ impl LsmStorageInner {
 
         let mut sstables = Vec::new();
         for sstable_id in snapshot.l0_sstables.iter() {
-            match _lower {
-                Bound::Included(key) => {
-                    let iter = SsTableIterator::create_and_seek_to_key(
-                        snapshot.sstables[sstable_id].clone(),
-                        key::Key::from_slice(key),
-                    )?;
-                    sstables.push(Box::new(iter));
-                }
-                Bound::Excluded(key) => {
-                    let mut iter = SsTableIterator::create_and_seek_to_key(
-                        snapshot.sstables[sstable_id].clone(),
-                        key::Key::from_slice(key),
-                    )?;
-                    let _ = iter.next();
-                    if iter.is_valid() {
+            let table = snapshot.sstables[sstable_id].clone();
+            if range_overlap(
+                _lower,
+                _upper,
+                table.first_key().as_key_slice(),
+                table.last_key().as_key_slice(),
+            ) {
+                match _lower {
+                    Bound::Included(key) => {
+                        let iter = SsTableIterator::create_and_seek_to_key(
+                            table,
+                            key::Key::from_slice(key),
+                        )?;
                         sstables.push(Box::new(iter));
                     }
-                }
-                Bound::Unbounded => {
-                    let iter = SsTableIterator::create_and_seek_to_first(
-                        snapshot.sstables[sstable_id].clone(),
-                    )?;
-                    sstables.push(Box::new(iter));
+                    Bound::Excluded(key) => {
+                        let mut iter = SsTableIterator::create_and_seek_to_key(
+                            table,
+                            key::Key::from_slice(key),
+                        )?;
+                        let _ = iter.next();
+                        if iter.is_valid() {
+                            sstables.push(Box::new(iter));
+                        }
+                    }
+                    Bound::Unbounded => {
+                        let iter = SsTableIterator::create_and_seek_to_first(table)?;
+                        sstables.push(Box::new(iter));
+                    }
                 }
             }
         }
@@ -453,4 +484,30 @@ impl LsmStorageInner {
             map_bound(_upper),
         )?))
     }
+}
+fn range_overlap(
+    user_begin: Bound<&[u8]>,
+    user_end: Bound<&[u8]>,
+    table_begin: KeySlice,
+    table_end: KeySlice,
+) -> bool {
+    match user_end {
+        Bound::Excluded(key) if key <= table_begin.raw_ref() => {
+            return false;
+        }
+        Bound::Included(key) if key < table_begin.raw_ref() => {
+            return false;
+        }
+        _ => {}
+    }
+    match user_begin {
+        Bound::Excluded(key) if key >= table_end.raw_ref() => {
+            return false;
+        }
+        Bound::Included(key) if key > table_end.raw_ref() => {
+            return false;
+        }
+        _ => {}
+    }
+    true
 }

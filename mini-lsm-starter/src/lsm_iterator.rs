@@ -17,7 +17,7 @@
 
 use std::ops::Bound;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Ok, Result};
 use bytes::Bytes;
 
 use crate::{
@@ -40,8 +40,7 @@ pub struct LsmIterator {
 impl LsmIterator {
     pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
         let mut lsm = Self { inner: iter, upper };
-        assert!(lsm.is_valid()); //理论来说，MergeIterator::new()得到的全是有效的迭代器
-        if lsm.value().is_empty() {
+        if lsm.is_valid() && lsm.value().is_empty() {
             let _ = lsm.next();
         }
         Ok(lsm)
@@ -68,6 +67,10 @@ impl StorageIterator for LsmIterator {
 
     fn value(&self) -> &[u8] {
         self.inner.value()
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.inner.num_active_iterators()
     }
 
     fn next(&mut self) -> Result<()> {
@@ -119,6 +122,10 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
             panic!("invalid access to the underlying iterator");
         }
         self.iter.value()
+    }
+
+    fn num_active_iterators(&self) -> usize {
+        self.iter.num_active_iterators()
     }
 
     fn next(&mut self) -> Result<()> {

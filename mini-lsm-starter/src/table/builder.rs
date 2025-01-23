@@ -69,7 +69,6 @@ impl SsTableBuilder {
         let offset = self.data.len();
         self.data.append(&mut encoded_block.to_vec());
         // 将旧 block 的元信息加入到 meta
-        println!("old block first key: {:?}", self.first_key);
         self.meta.push(BlockMeta {
             offset: offset as usize,
             first_key: KeyBytes::from_bytes(self.first_key.clone().into()),
@@ -81,7 +80,6 @@ impl SsTableBuilder {
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
         if self.first_key.is_empty() {
             // 如果这是整个 Block 的第一条记录，保存下来
-            println!("first key: {:?}", key);
             self.first_key = key.raw_ref().to_vec();
         }
 
@@ -127,7 +125,7 @@ impl SsTableBuilder {
             block_cache,
             file,
             block_meta: self.meta.clone(),
-            block_meta_offset: self.data.len() as usize,
+            block_meta_offset: self.data.len(),
             first_key: self.meta[0].clone().first_key,
             last_key: self.meta[self.meta.len() - 1].clone().last_key,
             bloom: None,
