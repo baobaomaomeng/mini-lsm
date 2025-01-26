@@ -31,26 +31,29 @@ impl BlockBuilder {
     #[must_use]
     pub fn add(&mut self, key: KeySlice, value: &[u8]) -> bool {
         // 计算新条目的总大小
-        let entry_size = 4 + key.len() as u64 + value.len() as u64; // key_len + key + value_len + value
         let data_len = self.data.len() as u64;
-        let offsets_len = self.offsets.len() as u64 * 2;
+        let offsets_len = self.offsets.len() as u64;
+        let overlap = compute_overlap(self.first_key.as_key_slice(), key);
         let mut add_entry = || {
             self.offsets.push(self.data.len() as u16);
-            self.data.put_u16(key.len() as u16);
-            self.data.extend_from_slice(key.raw_ref());
+            // Encode key overlap.
+            self.data.put_u16(overlap as u16);
+            // Encode key length.
+            self.data.put_u16((key.len() - overlap) as u16);
+            self.data.extend_from_slice(&key.raw_ref()[overlap..]);
             self.data.put_u16(value.len() as u16);
             self.data.extend_from_slice(value);
+
+            if self.first_key.is_empty() {
+                self.first_key = key.to_key_vec();
+            }
         };
 
-        if data_len == 0 {
-            // 第一个条目，不在乎大小是否超出
-            self.first_key.set_from_slice(key);
-            add_entry();
-            return true;
-        }
-
-        // 检查是否超出块大小限制
-        if data_len + offsets_len + 8 + entry_size > self.block_size as u64 {
+        let entry_size = 6 + (key.len() - overlap) as u64 + value.len() as u64; // key_len + key + value_len + value
+                                                                                // 检查是否超出块大小限制
+        if data_len != 0
+            && 2 + data_len + ((offsets_len + 1) * 2 as u64) + entry_size > self.block_size as u64
+        {
             return false;
         }
         add_entry();
@@ -73,4 +76,19 @@ impl BlockBuilder {
     pub fn first_key(&self) -> KeyBytes {
         self.first_key.clone().into_key_bytes()
     }
+}
+
+fn compute_overlap(first_key: KeySlice, key: KeySlice) -> usize {
+    let mut overlap_length = 0;
+    let min_length = std::cmp::min(first_key.len(), key.len());
+
+    for i in 0..min_length {
+        if first_key.raw_ref()[i] == key.raw_ref()[i] {
+            overlap_length += 1;
+        } else {
+            break;
+        }
+    }
+
+    overlap_length
 }

@@ -314,6 +314,16 @@ impl LsmStorageInner {
             }
             for table in self.state.read().l0_sstables.iter() {
                 let table = self.state.read().sstables[table].clone();
+                if table.bloom.is_some()
+                    && !table
+                        .bloom
+                        .as_ref()
+                        .unwrap()
+                        .may_contain(farmhash::fingerprint32(_key))
+                {
+                    continue;
+                }
+
                 let iter =
                     SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(_key))?;
                 if iter.is_valid() && iter.key().raw_ref() == _key {
@@ -388,7 +398,7 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        let _ = self.state_lock.lock();
+        let _guard = self.state_lock.lock();
         let imm_memtable = {
             let guard = self.state.read();
             let memtable_to_flush = guard

@@ -82,12 +82,14 @@ impl BlockIterator {
     fn get_key(&mut self, star: usize) -> usize {
         let mut entry = &self.block.data[star..];
         // 解码key的长度，get_u16会自动向后移动2个字节
+        let overlap_len = entry.get_u16() as usize;
         let key_len = entry.get_u16() as usize;
         let key = &entry[..key_len];
         self.key.clear();
+        self.key.append(&self.first_key.raw_ref()[..overlap_len]);
         self.key.append(key);
 
-        star + 2 + key_len
+        star + 4 + key_len
     }
 
     fn get_value(&mut self, star: usize) {
@@ -106,6 +108,7 @@ impl BlockIterator {
     /// Seeks to the first key in the block.
     pub fn seek_to_first(&mut self) {
         self.get_idx_kv(0);
+        self.first_key = self.key.clone();
     }
 
     /// Move to the next key in the block.
