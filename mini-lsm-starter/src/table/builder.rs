@@ -108,6 +108,10 @@ impl SsTableBuilder {
         self.data.len()
     }
 
+    pub fn have_data_to_build(&self) -> bool {
+        !self.builder.is_empty()
+    }
+
     /// Builds the SSTable and writes it to the given path. Use the `FileObject` structure to manipulate the disk objects.
     pub fn build(
         &mut self,

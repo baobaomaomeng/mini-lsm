@@ -137,7 +137,7 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
             }
             return Ok(());
         }
-        println!("current.1.key(): {:?}", current.1.key());
+
         //如果当前迭代器key小于下一个迭代器key，则交换
         if let Some(mut inner_iter) = self.iters.peek_mut() {
             if *current < *inner_iter {
