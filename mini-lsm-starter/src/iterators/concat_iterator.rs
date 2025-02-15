@@ -45,7 +45,7 @@ impl SstConcatIterator {
         Ok(Self {
             current: Some(SsTableIterator::create_and_seek_to_first(sstables[0].clone()).unwrap()),
             next_sst_idx: 1,
-            sstables: sstables,
+            sstables,
         })
     }
 
@@ -71,7 +71,7 @@ impl SstConcatIterator {
             sstables,
         };
         iter.move_until_valid()?;
-        return Ok(iter);
+        Ok(iter)
     }
 
     //最多跑两次循环
@@ -114,6 +114,7 @@ impl StorageIterator for SstConcatIterator {
 
     fn next(&mut self) -> Result<()> {
         self.current.as_mut().unwrap().next()?;
+        let _ = self.move_until_valid();
         Ok(())
     }
 

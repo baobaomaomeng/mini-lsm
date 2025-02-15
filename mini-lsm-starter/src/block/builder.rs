@@ -52,7 +52,7 @@ impl BlockBuilder {
         let entry_size = 6 + (key.len() - overlap) as u64 + value.len() as u64; // key_len + key + value_len + value
                                                                                 // 检查是否超出块大小限制
         if data_len != 0
-            && 2 + data_len + ((offsets_len + 1) * 2 as u64) + entry_size > self.block_size as u64
+            && 2 + data_len + ((offsets_len + 1) * 2_u64) + entry_size > self.block_size as u64
         {
             return false;
         }

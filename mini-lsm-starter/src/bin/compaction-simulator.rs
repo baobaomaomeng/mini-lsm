@@ -443,6 +443,10 @@ fn main() {
                     max_space = max_space.max(storage.file_list.len());
                     let (snapshot, del) =
                         controller.apply_compaction_result(&storage.snapshot, &task, &sst_ids);
+                    println!("--- file to remove");
+                    for i in del.iter() {
+                        print!("{},", i);
+                    }
                     storage.snapshot = snapshot;
                     storage.remove(&del);
                     println!("--- After Compaction ---");
@@ -540,6 +544,12 @@ fn main() {
                     }
                     controller.generate_compaction_task(&storage.snapshot)
                 } {
+                    println!("Compaction Task Details:");
+                    println!("Upper Level: {:?}", task.upper_level);
+                    println!("Upper Level SST IDs: {:?}", task.upper_level_sst_ids);
+                    println!("Lower Level: {:?}", task.lower_level);
+                    println!("Lower Level SST IDs: {:?}", task.lower_level_sst_ids);
+
                     let mut sst_ids = Vec::new();
                     let split_num = task.upper_level_sst_ids.len() + task.lower_level_sst_ids.len();
                     let mut first_keys = Vec::new();
