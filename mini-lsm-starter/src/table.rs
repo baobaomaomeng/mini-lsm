@@ -151,14 +151,6 @@ impl SsTable {
         let meta_len = end - 4 - meta_offset as u64;
         let meta_buf = file.read(meta_offset as u64, meta_len)?;
         let meta = BlockMeta::decode_block_meta(&meta_buf[..]);
-        for it in meta.clone() {
-            println!(
-                "offset:{}, first_key:{}, last_key:{}",
-                it.offset,
-                it.first_key.len(),
-                it.last_key.len()
-            );
-        }
         Ok(Self {
             file,
             block_meta: meta.clone(),

@@ -15,13 +15,16 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::fs::File;
+use std::fs::OpenOptions;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
+use std::{fs::File, io::Write};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use parking_lot::{Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
+use serde_json::Deserializer;
 
 use crate::compact::CompactionTask;
 
@@ -37,12 +40,38 @@ pub enum ManifestRecord {
 }
 
 impl Manifest {
-    pub fn create(_path: impl AsRef<Path>) -> Result<Self> {
-        unimplemented!()
+    pub fn create(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self {
+            file: Arc::new(Mutex::new(
+                OpenOptions::new()
+                    .read(true)
+                    .create_new(true)
+                    .write(true)
+                    .open(path)
+                    .context("failed to create manifest")?,
+            )),
+        })
     }
 
-    pub fn recover(_path: impl AsRef<Path>) -> Result<(Self, Vec<ManifestRecord>)> {
-        unimplemented!()
+    pub fn recover(path: impl AsRef<Path>) -> Result<(Self, Vec<ManifestRecord>)> {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .open(path)
+            .context("failed to recover manifest")?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+        let stream = Deserializer::from_slice(&buf).into_iter::<ManifestRecord>();
+        let mut records = Vec::new();
+        for x in stream {
+            records.push(x?);
+        }
+        Ok((
+            Self {
+                file: Arc::new(Mutex::new(file)),
+            },
+            records,
+        ))
     }
 
     pub fn add_record(
@@ -53,7 +82,15 @@ impl Manifest {
         self.add_record_when_init(record)
     }
 
-    pub fn add_record_when_init(&self, _record: ManifestRecord) -> Result<()> {
-        unimplemented!()
+    pub fn add_record_when_init(&self, record: ManifestRecord) -> Result<()> {
+        // 获取锁，避免两个线程竞争写入
+        let mut file = self.file.lock();
+        // 将对象序列化成二进制数据
+        let buf = serde_json::to_vec(&record)?;
+        // 写入文件
+        file.write_all(&buf)?;
+        // 避免操作系统缓存，强制写入磁盘
+        file.sync_all()?;
+        Ok(())
     }
 }

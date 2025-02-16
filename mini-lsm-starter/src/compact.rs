@@ -19,6 +19,7 @@ mod leveled;
 mod simple_leveled;
 mod tiered;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use std::usize;
@@ -34,6 +35,7 @@ pub use tiered::{TieredCompactionController, TieredCompactionOptions, TieredComp
 use crate::iterators::merge_iterator::MergeIterator;
 use crate::iterators::StorageIterator;
 use crate::lsm_storage::{LsmStorageInner, LsmStorageState};
+use crate::manifest::ManifestRecord;
 use crate::table::{SsTable, SsTableBuilder, SsTableIterator};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -212,37 +214,61 @@ impl LsmStorageInner {
     }
 
     pub fn force_full_compaction(&self) -> Result<()> {
-        let (l0_ssts, l1_ssts) = {
+        let CompactionOptions::NoCompaction = self.options.compaction_options else {
+            panic!("full compaction can only be called with compaction is not enabled")
+        };
+
+        let snapshot = {
             let state = self.state.read();
-            (state.l0_sstables.clone(), state.levels[0].clone().1)
+            state.clone()
         };
+
+        let l0_sstables = snapshot.l0_sstables.clone();
+        let l1_sstables = snapshot.levels[0].1.clone();
         let compaction_task = CompactionTask::ForceFullCompaction {
-            l0_sstables: l0_ssts.clone(),
-            l1_sstables: l1_ssts.clone(),
+            l0_sstables: l0_sstables.clone(),
+            l1_sstables: l1_sstables.clone(),
         };
+
+        println!("force full compaction: {:?}", compaction_task);
 
         let sstables = self.compact(&compaction_task)?;
+        let mut ids = Vec::with_capacity(sstables.len());
+
         {
-            let mut guard = self.state.write();
-            let mut snapshot = guard.as_ref().clone();
-
-            // 移除sstables存储的历史文件
-            for sst in l0_ssts.iter().chain(l1_ssts.iter()) {
-                snapshot.sstables.remove(sst);
+            let state_lock = self.state_lock.lock();
+            let mut state = self.state.read().as_ref().clone();
+            for sst in l0_sstables.iter().chain(l1_sstables.iter()) {
+                let result = state.sstables.remove(sst);
+                assert!(result.is_some());
             }
-
-            // 清空l0_sstables、levels(L1)
-            snapshot.l0_sstables.clear();
-            snapshot.levels[0].1.clear();
-
-            for sst in sstables {
-                // 将新生成的sst_id保存至L1
-                snapshot.levels[0].1.push(sst.sst_id());
-                // sstables插入新SST
-                snapshot.sstables.insert(sst.sst_id(), sst);
+            for new_sst in sstables {
+                ids.push(new_sst.sst_id());
+                let result = state.sstables.insert(new_sst.sst_id(), new_sst);
+                assert!(result.is_none());
             }
-            *guard = Arc::new(snapshot)
+            assert_eq!(l1_sstables, state.levels[0].1);
+            state.levels[0].1.clone_from(&ids);
+            let mut l0_sstables_map = l0_sstables.iter().copied().collect::<HashSet<_>>();
+            state.l0_sstables = state
+                .l0_sstables
+                .iter()
+                .filter(|x| !l0_sstables_map.remove(x))
+                .copied()
+                .collect::<Vec<_>>();
+            assert!(l0_sstables_map.is_empty());
+            *self.state.write() = Arc::new(state);
+            self.sync_dir()?;
+            self.manifest.as_ref().unwrap().add_record(
+                &state_lock,
+                ManifestRecord::Compaction(compaction_task, ids.clone()),
+            )?;
         }
+        for sst in l0_sstables.iter().chain(l1_sstables.iter()) {
+            std::fs::remove_file(self.path_of_sst(*sst))?;
+        }
+
+        println!("force full compaction done, new SSTs: {:?}", ids);
 
         Ok(())
     }
@@ -287,6 +313,14 @@ impl LsmStorageInner {
 
             let mut state = self.state.write();
             *state = Arc::new(snapshot);
+            drop(state);
+
+            //manifest记录操作
+            self.manifest.as_ref().unwrap().add_record(
+                &_state_lock,
+                ManifestRecord::Compaction(task, output.clone()),
+            )?;
+            self.sync_dir()?;
 
             ssts_to_remove
         };
@@ -300,6 +334,7 @@ impl LsmStorageInner {
         for sst in ssts_to_remove {
             std::fs::remove_file(self.path_of_sst(sst.sst_id()))?;
         }
+        self.sync_dir()?;
         Ok(())
     }
 

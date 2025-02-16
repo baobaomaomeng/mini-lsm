@@ -73,7 +73,7 @@ impl LeveledCompactionController {
         let mut last_level_size: u64 = snapshot.levels[self.options.max_levels - 1]
             .1
             .iter()
-            .map(|x| snapshot.sstables.get(x).unwrap().table_size() as u64)
+            .map(|x| snapshot.sstables.get(x).unwrap().table_size())
             .sum();
         let mut target = (0..self.options.max_levels).map(|_| 0).collect::<Vec<_>>();
         let mut idx = self.options.max_levels;
@@ -146,20 +146,14 @@ impl LeveledCompactionController {
         snapshot: &LsmStorageState,
         task: &LeveledCompactionTask,
         output: &[usize],
-        _in_recovery: bool,
+        in_recovery: bool,
     ) -> (LsmStorageState, Vec<usize>) {
         let mut snapshot = snapshot.clone();
         let mut files_to_remove: Vec<usize> = Vec::new();
 
         let filter_ssts = |ssts: &Vec<usize>, ssts_set: &mut HashSet<usize>| {
             ssts.iter()
-                .filter_map(|x| {
-                    if ssts_set.remove(x) {
-                        None
-                    } else {
-                        Some(*x)
-                    }
-                })
+                .filter_map(|x| if ssts_set.remove(x) { None } else { Some(*x) })
                 .collect::<Vec<_>>()
         };
 
@@ -192,15 +186,18 @@ impl LeveledCompactionController {
         );
         assert!(lower_level_ssts_set.is_empty());
         new_lower_level_ssts.extend(output);
-        //因为是部分合并的原因，所以需要重新排序
-        new_lower_level_ssts.sort_by(|x, y| {
-            snapshot
-                .sstables
-                .get(x)
-                .unwrap()
-                .first_key()
-                .cmp(snapshot.sstables.get(y).unwrap().first_key())
-        });
+
+        if !in_recovery {
+            //因为是部分合并的原因，所以需要重新排序
+            new_lower_level_ssts.sort_by(|x, y| {
+                snapshot
+                    .sstables
+                    .get(x)
+                    .unwrap()
+                    .first_key()
+                    .cmp(snapshot.sstables.get(y).unwrap().first_key())
+            });
+        }
 
         snapshot.levels[task.lower_level - 1].1 = new_lower_level_ssts;
         (snapshot, files_to_remove)

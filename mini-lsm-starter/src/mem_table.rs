@@ -34,11 +34,11 @@ pub(crate) fn map_bound(bound: Bound<&[u8]>) -> Bound<Bytes> {
 }
 
 impl MemTable {
-    pub fn create(_id: usize) -> Self {
+    pub fn create(id: usize) -> Self {
         Self {
             map: Arc::new(SkipMap::new()),
             wal: None,
-            id: _id,
+            id: id,
             approximate_size: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -119,9 +119,9 @@ impl MemTable {
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
-    pub fn flush(&self, _builder: &mut SsTableBuilder) -> Result<()> {
+    pub fn flush(&self, builder: &mut SsTableBuilder) -> Result<()> {
         for entry in self.map.iter() {
-            _builder.add(
+            builder.add(
                 KeySlice::from_slice(entry.key().as_ref()),
                 entry.value().as_ref(),
             );
