@@ -69,7 +69,9 @@ impl SsTableBuilder {
         let encoded_block = old_builder.build().encode();
         // 记录旧 block 在 self.data 中的起始偏移
         let offset = self.data.len();
+        let checksum = crc32fast::hash(&encoded_block);
         self.data.append(&mut encoded_block.to_vec());
+        self.data.put_u32(checksum);
         // 将旧 block 的元信息加入到 meta
         self.meta.push(BlockMeta {
             offset: offset as usize,

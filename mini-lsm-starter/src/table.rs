@@ -23,12 +23,12 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 pub use builder::SsTableBuilder;
 use bytes::{Buf, BufMut};
 pub use iterator::SsTableIterator;
 
-use crate::block::Block;
+use crate::block::{self, Block};
 use crate::key::{KeyBytes, KeySlice};
 use crate::lsm_storage::BlockCache;
 
@@ -48,28 +48,29 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(
-        block_meta: &[BlockMeta],
-        #[allow(clippy::ptr_arg)] // remove this allow after you finish
-        buf: &mut Vec<u8>,
-    ) {
+    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
+        let original_len = buf.len();
+        buf.put_u32(block_meta.len() as u32);
         for meta in block_meta {
             buf.put_u32(meta.offset as u32);
-            buf.put_u32(meta.first_key.len() as u32);
+            buf.put_u16(meta.first_key.len() as u16);
             buf.extend_from_slice(meta.first_key.raw_ref());
-            buf.put_u32(meta.last_key.len() as u32);
+            buf.put_u16(meta.last_key.len() as u16);
             buf.extend_from_slice(meta.last_key.raw_ref());
         }
+        buf.put_u32(crc32fast::hash(&buf[original_len + 4..]));
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(mut buf: impl Buf) -> Vec<BlockMeta> {
+    pub fn decode_block_meta(mut buf: &[u8]) -> Result<Vec<BlockMeta>> {
         let mut block_meta = Vec::new();
-        while buf.has_remaining() {
+        let num = buf.get_u32() as usize;
+        let checksum = crc32fast::hash(&buf[..buf.remaining() - 4]);
+        for _ in 0..num {
             let offset = buf.get_u32() as usize;
-            let first_key_len = buf.get_u32() as usize;
+            let first_key_len = buf.get_u16() as usize;
             let first_key = KeyBytes::from_bytes(buf.copy_to_bytes(first_key_len));
-            let last_key_len = buf.get_u32() as usize;
+            let last_key_len = buf.get_u16() as usize;
             let last_key = KeyBytes::from_bytes(buf.copy_to_bytes(last_key_len));
             block_meta.push(BlockMeta {
                 offset,
@@ -77,7 +78,11 @@ impl BlockMeta {
                 last_key,
             });
         }
-        block_meta
+        if buf.get_u32() != checksum {
+            bail!("meta checksum mismatched");
+        }
+
+        Ok(block_meta)
     }
 }
 
@@ -150,7 +155,7 @@ impl SsTable {
         let meta_offset = file.read(end - 4, 4)?.as_slice().get_u32() as usize;
         let meta_len = end - 4 - meta_offset as u64;
         let meta_buf = file.read(meta_offset as u64, meta_len)?;
-        let meta = BlockMeta::decode_block_meta(&meta_buf[..]);
+        let meta = BlockMeta::decode_block_meta(&meta_buf[..])?;
         Ok(Self {
             file,
             block_meta: meta.clone(),
@@ -186,12 +191,22 @@ impl SsTable {
 
     /// Read a block from the disk.
     pub fn read_block(&self, block_idx: usize) -> Result<Arc<Block>> {
-        let offset = self.block_meta[block_idx].offset as u64;
+        let offset = self.block_meta[block_idx].offset;
         let offset_end = self
             .block_meta
             .get(block_idx + 1)
-            .map_or(self.block_meta_offset as u64, |x| x.offset as u64);
-        let block_data: Vec<u8> = self.file.read(offset, offset_end - offset)?;
+            .map_or(self.block_meta_offset, |x| x.offset);
+        let data: Vec<u8> = self
+            .file
+            .read(offset as u64, (offset_end - offset) as u64)?;
+        let block_len = offset_end - offset - 4;
+        let block_data = &data[..block_len];
+        let checksum = (&data[block_len..]).get_u32();
+
+        if checksum != crc32fast::hash(block_data) {
+            bail!("block checksum mismatched");
+        }
+
         Ok(Arc::new(Block::decode(&block_data)))
     }
 

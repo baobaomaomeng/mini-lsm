@@ -25,6 +25,7 @@ use std::sync::Arc;
 use anyhow::{Context, Ok, Result};
 use bytes::Bytes;
 use parking_lot::{Mutex, MutexGuard, RwLock};
+use serde::de::value;
 
 use crate::block::Block;
 use crate::compact::{
@@ -194,6 +195,12 @@ impl MiniLsm {
                 .map_err(|e| anyhow::anyhow!("{:?}", e))?;
         }
 
+        if self.inner.options.enable_wal {
+            self.inner.sync()?;
+            self.inner.sync_dir()?;
+            return Ok(());
+        }
+
         if !self.inner.state.read().memtable.is_empty() {
             self.inner
                 .force_freeze_memtable(&self.inner.state_lock.lock())?;
@@ -312,6 +319,12 @@ impl LsmStorageInner {
         let block_cache = Arc::new(BlockCache::new(1 << 20));
         let mut next_sst_id = 1;
         if !manifest_path.exists() {
+            if options.enable_wal {
+                state.memtable = Arc::new(MemTable::create_with_wal(
+                    state.memtable.id(),
+                    Self::path_of_wal_static(path, state.memtable.id()),
+                )?);
+            }
             manifest = Some(Manifest::create(manifest_path)?);
             manifest
                 .as_mut()
@@ -321,31 +334,35 @@ impl LsmStorageInner {
             let (old_manifest, records) = Manifest::recover(&manifest_path)?;
             let mut memtables = BTreeSet::new();
             for record in records {
+                let record_sst_next;
                 match record {
                     ManifestRecord::Flush(sst_id) => {
+                        let res = memtables.remove(&sst_id);
+                        assert!(res, "memtable not exist?");
                         if compaction_controller.flush_to_l0() {
                             state.l0_sstables.insert(0, sst_id);
                         } else {
                             state.levels.insert(0, (sst_id, vec![sst_id]));
                         }
-                        next_sst_id = next_sst_id.max(sst_id);
+                        record_sst_next = sst_id + 1;
                     }
                     ManifestRecord::NewMemtable(x) => {
-                        next_sst_id = next_sst_id.max(x);
+                        record_sst_next = x + 1;
                         memtables.insert(x);
                     }
                     ManifestRecord::Compaction(task, output) => {
                         let (new_state, _) = compaction_controller
                             .apply_compaction_result(&state, &task, &output, true);
                         state = new_state;
-                        next_sst_id =
-                            next_sst_id.max(output.iter().max().copied().unwrap_or_default());
+                        record_sst_next = output.iter().max().copied().unwrap_or_default() + 1;
                     }
                 }
+                next_sst_id = next_sst_id.max(record_sst_next);
             }
 
             let block_cache = Arc::new(BlockCache::new(1 << 20));
 
+            //恢复已持久化的sstables
             for sst_id in state
                 .l0_sstables
                 .iter()
@@ -359,8 +376,26 @@ impl LsmStorageInner {
                 )?;
                 state.sstables.insert(*sst_id, Arc::new(sst));
             }
-            next_sst_id += 1;
-            state.memtable = Arc::new(MemTable::create(next_sst_id));
+
+            //回复未被持久化的memtable
+            if options.enable_wal {
+                let mut wal_cnt = 0;
+                for id in memtables.iter() {
+                    let memtable =
+                        MemTable::recover_from_wal(*id, Self::path_of_wal_static(path, *id))?;
+                    if !memtable.is_empty() {
+                        state.imm_memtables.insert(0, Arc::new(memtable));
+                        wal_cnt += 1;
+                    }
+                }
+                println!("{} WALs recovered", wal_cnt);
+                state.memtable = Arc::new(MemTable::create_with_wal(
+                    next_sst_id,
+                    Self::path_of_wal_static(path, next_sst_id),
+                )?);
+            } else {
+                state.memtable = Arc::new(MemTable::create(next_sst_id));
+            }
             old_manifest.add_record_when_init(ManifestRecord::NewMemtable(state.memtable.id()))?;
             manifest = Some(old_manifest);
             next_sst_id += 1;
@@ -397,8 +432,9 @@ impl LsmStorageInner {
         Ok(storage)
     }
 
+    ///刷新memtable
     pub fn sync(&self) -> Result<()> {
-        unimplemented!()
+        self.state.read().memtable.sync_wal()
     }
 
     pub fn add_compaction_filter(&self, compaction_filter: CompactionFilter) {
@@ -476,14 +512,8 @@ impl LsmStorageInner {
         }
     }
 
-    /// Write a batch of data into the storage. Implement in week 2 day 7.
-    pub fn write_batch<T: AsRef<[u8]>>(&self, _batch: &[WriteBatchRecord<T>]) -> Result<()> {
-        unimplemented!()
-    }
-
-    /// Put a key-value pair into the storage by writing into the current memtable.
-    pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        let _ = self.state.read().memtable.put(_key, _value);
+    fn write_batch_inner(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        let _ = self.state.read().memtable.put(key, value);
         let approximate_size = self.state.read().memtable.approximate_size();
         if approximate_size > self.options.target_sst_size {
             let state_lock = self.state_lock.lock();
@@ -494,6 +524,26 @@ impl LsmStorageInner {
             }
         }
         Ok(())
+    }
+
+    /// Write a batch of data into the storage. Implement in week 2 day 7.
+    pub fn write_batch<T: AsRef<[u8]>>(&self, batch: &[WriteBatchRecord<T>]) -> Result<()> {
+        for record in batch {
+            match record {
+                WriteBatchRecord::Put(key, value) => {
+                    self.write_batch_inner(key.as_ref(), value.as_ref())?;
+                }
+                WriteBatchRecord::Del(key) => {
+                    self.write_batch_inner(key.as_ref(), b"")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Put a key-value pair into the storage by writing into the current memtable.
+    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.write_batch_inner(key, value)
     }
 
     /// Remove a key from the storage by writing an empty value.
@@ -525,7 +575,14 @@ impl LsmStorageInner {
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
         let new_memtable_id = self.next_sst_id();
-        let new_men_table: Arc<MemTable> = Arc::new(MemTable::create(new_memtable_id));
+        let new_men_table: Arc<MemTable> = if self.options.enable_wal {
+            Arc::new(MemTable::create_with_wal(
+                new_memtable_id,
+                self.path_of_wal(new_memtable_id),
+            )?)
+        } else {
+            Arc::new(MemTable::create(new_memtable_id))
+        };
         {
             let mut guard = self.state.write();
             let mut snapshot = guard.as_ref().clone();
@@ -539,7 +596,7 @@ impl LsmStorageInner {
             _state_lock_observer,
             ManifestRecord::NewMemtable(new_memtable_id),
         );
-        self.sync_dir()?;
+
         Ok(())
     }
 
@@ -584,7 +641,9 @@ impl LsmStorageInner {
             .unwrap()
             .add_record(&_guard, ManifestRecord::Flush(sst_id))?;
 
-        self.sync_dir()?;
+        if self.options.enable_wal {
+            std::fs::remove_file(self.path_of_wal(sst_id))?;
+        }
         Ok(())
     }
 
