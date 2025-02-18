@@ -11,10 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::path::Path;
 use std::sync::Arc;
 
@@ -24,7 +20,7 @@ use bytes::BufMut;
 use super::{bloom::Bloom, BlockMeta, SsTable};
 use crate::{
     block::BlockBuilder,
-    key::{KeyBytes, KeySlice},
+    key::{KeySlice, KeyVec},
     lsm_storage::BlockCache,
     table::FileObject,
 };
@@ -32,8 +28,8 @@ use crate::{
 /// Builds an SSTable from key-value pairs.
 pub struct SsTableBuilder {
     builder: BlockBuilder,
-    first_key: Vec<u8>,
-    last_key: Vec<u8>,
+    first_key: KeyVec,
+    last_key: KeyVec,
     data: Vec<u8>,
     pub(crate) meta: Vec<BlockMeta>,
     pub(crate) key_hash: Vec<u32>,
@@ -45,8 +41,8 @@ impl SsTableBuilder {
     pub fn new(block_size: usize) -> Self {
         Self {
             builder: BlockBuilder::new(block_size),
-            first_key: Vec::new(),
-            last_key: Vec::new(),
+            first_key: KeyVec::new(),
+            last_key: KeyVec::new(),
             data: Vec::new(),
             meta: Vec::new(),
             key_hash: Vec::new(),
@@ -75,8 +71,8 @@ impl SsTableBuilder {
         // 将旧 block 的元信息加入到 meta
         self.meta.push(BlockMeta {
             offset: offset as usize,
-            first_key: KeyBytes::from_bytes(self.first_key.clone().into()),
-            last_key: KeyBytes::from_bytes(self.last_key.clone().into()),
+            first_key: self.first_key.clone().into_key_bytes(),
+            last_key: self.last_key.clone().into_key_bytes(),
         });
         self.clear_keys();
     }
@@ -84,22 +80,22 @@ impl SsTableBuilder {
     pub fn add(&mut self, key: KeySlice, value: &[u8]) {
         if self.first_key.is_empty() {
             // 如果这是整个 Block 的第一条记录，保存下来
-            self.first_key = key.raw_ref().to_vec();
+            self.first_key = key.to_key_vec();
         }
 
         // 先尝试往当前 block 中插入
         // 如果返回 false，表示加入失败，需要对当前 block 进行封装并创建新的 block
         if !self.builder.add(key, value) {
             self.finish_block();
-            self.first_key = key.raw_ref().to_vec();
-            self.last_key = key.raw_ref().to_vec();
+            self.first_key = key.to_key_vec();
+            self.last_key = key.to_key_vec();
             // 因为刚才 add 失败，需要在新的 builder 中再次插入这条 key-value
             let _ = self.builder.add(key, value);
         }
 
         // 最后更新一下 last_key
-        self.last_key = key.raw_ref().to_vec();
-        self.key_hash.push(farmhash::fingerprint32(key.raw_ref()));
+        self.last_key = key.to_key_vec();
+        self.key_hash.push(farmhash::fingerprint32(key.key_ref()));
     }
 
     /// Get the estimated size of the SSTable.

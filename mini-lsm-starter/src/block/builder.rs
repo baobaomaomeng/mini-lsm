@@ -39,8 +39,9 @@ impl BlockBuilder {
             // Encode key overlap.
             self.data.put_u16(overlap as u16);
             // Encode key length.
-            self.data.put_u16((key.len() - overlap) as u16);
-            self.data.extend_from_slice(&key.raw_ref()[overlap..]);
+            self.data.put_u16((key.key_len() - overlap) as u16);
+            self.data.extend_from_slice(&key.key_ref()[overlap..]);
+            self.data.put_u64(key.ts());
             self.data.put_u16(value.len() as u16);
             self.data.extend_from_slice(value);
 
@@ -49,8 +50,11 @@ impl BlockBuilder {
             }
         };
 
-        let entry_size = 6 + (key.len() - overlap) as u64 + value.len() as u64; // key_len + key + value_len + value
-                                                                                // 检查是否超出块大小限制
+        let entry_size = 6
+            + (key.key_len() - overlap) as u64
+            + value.len() as u64
+            + std::mem::size_of::<u64>() as u64; // key_len + key + value_len + value
+                                                 // 检查是否超出块大小限制
         if data_len != 0
             && 2 + data_len + ((offsets_len + 1) * 2_u64) + entry_size > self.block_size as u64
         {
@@ -80,10 +84,10 @@ impl BlockBuilder {
 
 fn compute_overlap(first_key: KeySlice, key: KeySlice) -> usize {
     let mut overlap_length = 0;
-    let min_length = std::cmp::min(first_key.len(), key.len());
+    let min_length = std::cmp::min(first_key.key_ref().len(), key.key_ref().len());
 
     for i in 0..min_length {
-        if first_key.raw_ref()[i] == key.raw_ref()[i] {
+        if first_key.key_ref()[i] == key.key_ref()[i] {
             overlap_length += 1;
         } else {
             break;

@@ -85,11 +85,14 @@ impl BlockIterator {
         let overlap_len = entry.get_u16() as usize;
         let key_len = entry.get_u16() as usize;
         let key = &entry[..key_len];
+        entry.advance(key_len);
+        let ts = entry.get_u64();
         self.key.clear();
-        self.key.append(&self.first_key.raw_ref()[..overlap_len]);
+        self.key.append(&self.first_key.key_ref()[..overlap_len]);
         self.key.append(key);
+        self.key.set_ts(ts);
 
-        star + 4 + key_len
+        star + 4 + key_len + std::mem::size_of::<u64>()
     }
 
     fn get_value(&mut self, star: usize) {
