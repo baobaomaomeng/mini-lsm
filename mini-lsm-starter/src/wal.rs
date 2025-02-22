@@ -23,6 +23,8 @@ use bytes::{Buf, BufMut, Bytes};
 use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 
+use crate::key::{KeyBytes, KeySlice};
+
 pub struct Wal {
     file: Arc<Mutex<BufWriter<File>>>,
 }
@@ -41,7 +43,7 @@ impl Wal {
         })
     }
 
-    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<Bytes, Bytes>) -> Result<Self> {
+    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<KeyBytes, Bytes>) -> Result<Self> {
         let mut buf = Vec::new();
         let mut file = OpenOptions::new()
             .read(true)
@@ -55,8 +57,7 @@ impl Wal {
         while buf.has_remaining() {
             let start = buf;
             let key_len = buf.get_u16() as usize;
-            let key = Bytes::copy_from_slice(&buf[..key_len]);
-            buf.advance(key_len);
+            let key = KeyBytes::from_bytes_with_ts(buf.copy_to_bytes(key_len), buf.get_u64());
             let value_len = buf.get_u16() as usize;
             let value = Bytes::copy_from_slice(&buf[..value_len]);
             buf.advance(value_len);
@@ -72,14 +73,19 @@ impl Wal {
             file: Arc::new(Mutex::new(BufWriter::new(file))),
         })
     }
-
-    pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        let len = 2 + key.len() + 2 + value.len() + 4;
+    pub fn put(&self, key: KeySlice, value: &[u8]) -> Result<()> {
+        let len = std::mem::size_of::<u16>()
+            + key.key_len()
+            + std::mem::size_of::<u16>()
+            + value.len()
+            + std::mem::size_of::<u32>()
+            + std::mem::size_of::<u64>();
         let mut buf = Vec::with_capacity(len);
 
-        let key_len = key.len().try_into().unwrap();
-        buf.put_u16(key_len);
-        buf.put_slice(key);
+        let key_len = key.key_len();
+        buf.put_u16(key_len as u16);
+        buf.put_slice(key.key_ref());
+        buf.put_u64(key.ts());
         let value_len = value.len().try_into().unwrap();
         buf.put_u16(value_len);
         buf.put_slice(value);

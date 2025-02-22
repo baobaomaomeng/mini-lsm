@@ -120,6 +120,10 @@ impl Key<Bytes> {
         Key(&self.0, self.1)
     }
 
+    pub fn copy_from_key_slice(slice: KeySlice) -> KeyBytes {
+        KeyBytes::from_bytes_with_ts(Bytes::copy_from_slice(slice.key_ref()), slice.ts())
+    }
+
     /// Create a `KeyBytes` from a `Bytes` and a ts.
     pub fn from_bytes_with_ts(bytes: Bytes, ts: u64) -> KeyBytes {
         Key(bytes, ts)

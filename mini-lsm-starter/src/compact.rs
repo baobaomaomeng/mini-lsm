@@ -135,15 +135,21 @@ impl LsmStorageInner {
         let mut builder = SsTableBuilder::new(self.options.block_size);
 
         let mut result = Vec::new();
+        let mut last_key = Vec::<u8>::new();
         while merge_iter.is_valid() {
             let key = merge_iter.key();
             let value = merge_iter.value();
-            if !value.is_empty() {
-                builder.add(key, value);
+            let same_as_last_key = merge_iter.key().key_ref() == last_key;
+
+            if !same_as_last_key {
+                last_key.clear();
+                last_key.extend(merge_iter.key().key_ref());
             }
+
+            builder.add(key, value);
             merge_iter.next().unwrap();
             // 超出限制，若超出限制则生成SST
-            if builder.estimated_size() >= self.options.target_sst_size {
+            if builder.estimated_size() >= self.options.target_sst_size && !same_as_last_key {
                 let id = self.next_sst_id();
                 let sst = builder.build(id, None, self.path_of_sst(id))?;
                 result.push(Arc::new(sst));
@@ -259,7 +265,7 @@ impl LsmStorageInner {
             assert!(l0_sstables_map.is_empty());
             *self.state.write() = Arc::new(state);
             self.sync_dir()?;
-            self.manifest.as_ref().unwrap().add_record(
+            self.manifest.add_record(
                 &state_lock,
                 ManifestRecord::Compaction(compaction_task, ids.clone()),
             )?;
@@ -316,7 +322,7 @@ impl LsmStorageInner {
             drop(state);
 
             //manifest记录操作
-            self.manifest.as_ref().unwrap().add_record(
+            self.manifest.add_record(
                 &_state_lock,
                 ManifestRecord::Compaction(task, output.clone()),
             )?;

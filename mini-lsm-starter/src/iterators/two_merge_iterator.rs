@@ -103,3 +103,8 @@ impl<
         Ok(())
     }
 }
+impl<A: StorageIterator, B: StorageIterator> TwoMergeIterator<A, B> {
+    fn get_two_key(&self) -> (A::KeyType<'_>, B::KeyType<'_>) {
+        (self.a.key(), self.b.key())
+    }
+}
