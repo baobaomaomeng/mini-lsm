@@ -39,6 +39,7 @@ use crate::key::{self, KeySlice};
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::{Manifest, ManifestRecord};
 use crate::mem_table::{map_bound, map_key_bound_plus_ts, MemTable};
+use crate::mvcc::txn::TxnIterator;
 use crate::mvcc::LsmMvccInner;
 use crate::table::{FileObject, SsTable, SsTableIterator};
 
@@ -260,11 +261,7 @@ impl MiniLsm {
         self.inner.sync()
     }
 
-    pub fn scan(
-        &self,
-        lower: Bound<&[u8]>,
-        upper: Bound<&[u8]>,
-    ) -> Result<FusedIterator<LsmIterator>> {
+    pub fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<TxnIterator> {
         self.inner.scan(lower, upper)
     }
 
@@ -294,6 +291,7 @@ impl LsmStorageInner {
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
     /// not exist.
     pub(crate) fn open(path: impl AsRef<Path>, options: LsmStorageOptions) -> Result<Self> {
+        let mut last_commit_ts = 0;
         let path = path.as_ref();
         if !path.exists() {
             std::fs::create_dir_all(path)?;
@@ -370,6 +368,7 @@ impl LsmStorageInner {
                     FileObject::open(&Self::path_of_sst_static(path, *sst_id))
                         .context("failed to open SST")?,
                 )?;
+                last_commit_ts = last_commit_ts.max(sst.max_ts());
                 state.sstables.insert(*sst_id, Arc::new(sst));
             }
 
@@ -377,12 +376,13 @@ impl LsmStorageInner {
             if options.enable_wal {
                 let mut wal_cnt = 0;
                 for id in memtables.iter() {
-                    let memtable =
+                    let (memtable, max_ts) =
                         MemTable::recover_from_wal(*id, Self::path_of_wal_static(path, *id))?;
                     if !memtable.is_empty() {
                         state.imm_memtables.insert(0, Arc::new(memtable));
                         wal_cnt += 1;
                     }
+                    last_commit_ts = last_commit_ts.max(max_ts);
                 }
                 println!("{} WALs recovered", wal_cnt);
                 state.memtable = Arc::new(MemTable::create_with_wal(
@@ -420,7 +420,7 @@ impl LsmStorageInner {
             compaction_controller,
             manifest,
             options: options.into(),
-            mvcc: LsmMvccInner::new(0),
+            mvcc: LsmMvccInner::new(last_commit_ts),
             compaction_filters: Arc::new(Mutex::new(Vec::new())),
         };
         storage.sync_dir()?;
@@ -438,15 +438,20 @@ impl LsmStorageInner {
         compaction_filters.push(compaction_filter);
     }
 
+    pub fn get<'a>(self: &'a Arc<Self>, key: &[u8]) -> Result<Option<Bytes>> {
+        let txn = self.mvcc.new_txn(self.clone(), self.options.serializable);
+        txn.get(key)
+    }
+
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
-    pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
+    pub fn get_with_ts(&self, key: &[u8], ts: u64) -> Result<Option<Bytes>> {
         let snapshot = {
             let guard = self.state.read();
             Arc::clone(&guard)
         };
 
         let memtable_iter = snapshot.memtable.scan(
-            Bound::Included(KeySlice::from_slice(key, key::TS_RANGE_BEGIN)),
+            Bound::Included(KeySlice::from_slice(key, ts)),
             Bound::Included(KeySlice::from_slice(key, key::TS_RANGE_END)),
         );
         if memtable_iter.is_valid() && memtable_iter.key().key_ref() == key {
@@ -458,7 +463,7 @@ impl LsmStorageInner {
 
         for memtable in &snapshot.imm_memtables {
             let memtable_iter = memtable.scan(
-                Bound::Included(KeySlice::from_slice(key, key::TS_RANGE_BEGIN)),
+                Bound::Included(KeySlice::from_slice(key, ts)),
                 Bound::Included(KeySlice::from_slice(key, key::TS_RANGE_END)),
             );
             if memtable_iter.is_valid() && memtable_iter.key().key_ref() == key {
@@ -482,10 +487,8 @@ impl LsmStorageInner {
                 continue;
             }
 
-            let iter = SsTableIterator::create_and_seek_to_key(
-                table,
-                KeySlice::from_slice(key, key::TS_RANGE_BEGIN),
-            )?;
+            let iter =
+                SsTableIterator::create_and_seek_to_key(table, KeySlice::from_slice(key, ts))?;
             if iter.is_valid() && iter.key().key_ref() == key {
                 if iter.value().is_empty() {
                     return Ok(None);
@@ -509,10 +512,8 @@ impl LsmStorageInner {
                 }
                 sst.push(table.clone());
             }
-            let iter = SstConcatIterator::create_and_seek_to_key(
-                sst,
-                KeySlice::from_slice(key, key::TS_RANGE_BEGIN),
-            )?;
+            let iter =
+                SstConcatIterator::create_and_seek_to_key(sst, KeySlice::from_slice(key, ts))?;
             if iter.is_valid() && iter.key().key_ref() == key {
                 if iter.value().is_empty() {
                     return Ok(None);
@@ -664,11 +665,21 @@ impl LsmStorageInner {
         Ok(())
     }
 
+    pub fn scan<'a>(
+        self: &'a Arc<Self>,
+        lower: Bound<&[u8]>,
+        upper: Bound<&[u8]>,
+    ) -> Result<TxnIterator> {
+        let txn = self.mvcc.new_txn(self.clone(), self.options.serializable);
+        txn.scan(lower, upper)
+    }
+
     /// Create an iterator over a range of keys.
-    pub fn scan(
+    pub fn scan_with_ts(
         &self,
         lower: Bound<&[u8]>,
         upper: Bound<&[u8]>,
+        ts: u64,
     ) -> Result<FusedIterator<LsmIterator>> {
         let snapshot = {
             let guard = self.state.read();
@@ -676,12 +687,12 @@ impl LsmStorageInner {
         };
         let mut memtable_iters = Vec::with_capacity(snapshot.imm_memtables.len() + 1);
         memtable_iters.push(Box::new(snapshot.memtable.scan(
-            map_key_bound_plus_ts(lower, key::TS_RANGE_BEGIN),
+            map_key_bound_plus_ts(lower, ts),
             map_key_bound_plus_ts(upper, key::TS_RANGE_END),
         )));
         for memtable in snapshot.imm_memtables.iter() {
             memtable_iters.push(Box::new(memtable.scan(
-                map_key_bound_plus_ts(lower, key::TS_RANGE_BEGIN),
+                map_key_bound_plus_ts(lower, ts),
                 map_key_bound_plus_ts(upper, key::TS_RANGE_END),
             )));
         }
@@ -758,6 +769,7 @@ impl LsmStorageInner {
         Ok(FusedIterator::new(LsmIterator::new(
             iter,
             map_bound(upper),
+            ts,
         )?))
     }
 }

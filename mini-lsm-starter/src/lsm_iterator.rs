@@ -39,21 +39,22 @@ pub struct LsmIterator {
     inner: LsmIteratorInner,
     upper: Bound<Bytes>,
     prev_key: Vec<u8>,
+    read_ts: u64,
 }
 
 impl LsmIterator {
-    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>) -> Result<Self> {
+    pub(crate) fn new(iter: LsmIteratorInner, upper: Bound<Bytes>, read_ts: u64) -> Result<Self> {
         let mut lsm = Self {
             inner: iter,
             upper,
             prev_key: Vec::new(),
+            read_ts,
         };
-        if lsm.is_valid() && lsm.value().is_empty() {
-            lsm.prev_key = lsm.key().to_vec();
-            let _ = lsm.next();
-        }
         if lsm.is_valid() {
             lsm.prev_key = lsm.key().to_vec();
+            if lsm.value().is_empty() || lsm.inner.key().ts() > read_ts {
+                let _ = lsm.next();
+            }
         }
         Ok(lsm)
     }
@@ -86,16 +87,17 @@ impl StorageIterator for LsmIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        let _ = self.inner.next();
-        if self.inner.is_valid() {
-            if self.inner.value().is_empty() {
+        while self.inner.next().is_ok() {
+            if !self.inner.is_valid() {
+                break;
+            }
+            if self.inner.value().is_empty() || self.inner.key().ts() > self.read_ts {
+                continue;
+            }
+            if self.prev_key != self.key().to_vec() {
                 self.prev_key = self.key().to_vec();
-                return self.next();
+                break;
             }
-            if self.prev_key == self.key().to_vec() {
-                return self.next();
-            }
-            self.prev_key = self.key().to_vec();
         }
         Ok(())
     }

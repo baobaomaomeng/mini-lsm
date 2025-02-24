@@ -34,6 +34,7 @@ pub struct SsTableBuilder {
     pub(crate) meta: Vec<BlockMeta>,
     pub(crate) key_hash: Vec<u32>,
     block_size: usize,
+    max_ts: u64,
 }
 
 impl SsTableBuilder {
@@ -47,6 +48,7 @@ impl SsTableBuilder {
             meta: Vec::new(),
             key_hash: Vec::new(),
             block_size,
+            max_ts: 0,
         }
     }
 
@@ -82,6 +84,7 @@ impl SsTableBuilder {
             // 如果这是整个 Block 的第一条记录，保存下来
             self.first_key = key.to_key_vec();
         }
+        self.max_ts = self.max_ts.max(key.ts());
 
         // 先尝试往当前 block 中插入
         // 如果返回 false，表示加入失败，需要对当前 block 进行封装并创建新的 block
@@ -122,7 +125,7 @@ impl SsTableBuilder {
         }
         let mut buf: Vec<u8> = vec![];
         buf.extend_from_slice(self.data.as_slice());
-        BlockMeta::encode_block_meta(self.meta.as_slice(), &mut buf);
+        BlockMeta::encode_block_meta(self.meta.as_slice(), self.max_ts, &mut buf);
         buf.put_u32(self.data.len() as u32);
         //添加bloom
         let bloom = Bloom::build_from_key_hashes(

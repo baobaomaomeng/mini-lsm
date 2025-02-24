@@ -48,7 +48,7 @@ impl BlockMeta {
     /// Encode block meta to a buffer.
     /// You may add extra fields to the buffer,
     /// in order to help keep track of `first_key` when decoding from the same buffer in the future.
-    pub fn encode_block_meta(block_meta: &[BlockMeta], buf: &mut Vec<u8>) {
+    pub fn encode_block_meta(block_meta: &[BlockMeta], max_ts: u64, buf: &mut Vec<u8>) {
         let original_len = buf.len();
         buf.put_u32(block_meta.len() as u32);
         for meta in block_meta {
@@ -60,11 +60,12 @@ impl BlockMeta {
             buf.extend_from_slice(meta.last_key.key_ref());
             buf.put_u64(meta.last_key.ts());
         }
+        buf.put_u64(max_ts);
         buf.put_u32(crc32fast::hash(&buf[original_len + 4..]));
     }
 
     /// Decode block meta from a buffer.
-    pub fn decode_block_meta(mut buf: &[u8]) -> Result<Vec<BlockMeta>> {
+    pub fn decode_block_meta(mut buf: &[u8]) -> Result<(Vec<BlockMeta>, u64)> {
         let mut block_meta = Vec::new();
         let num = buf.get_u32() as usize;
         let checksum = crc32fast::hash(&buf[..buf.remaining() - 4]);
@@ -82,11 +83,12 @@ impl BlockMeta {
                 last_key: last_key.into_key_bytes(),
             });
         }
+        let max_ts = buf.get_u64();
         if buf.get_u32() != checksum {
             bail!("meta checksum mismatched");
         }
 
-        Ok(block_meta)
+        Ok((block_meta, max_ts))
     }
 }
 
@@ -159,7 +161,7 @@ impl SsTable {
         let meta_offset = file.read(end - 4, 4)?.as_slice().get_u32() as usize;
         let meta_len = end - 4 - meta_offset as u64;
         let meta_buf = file.read(meta_offset as u64, meta_len)?;
-        let meta = BlockMeta::decode_block_meta(&meta_buf[..])?;
+        let (meta, max_ts) = BlockMeta::decode_block_meta(&meta_buf[..])?;
         Ok(Self {
             file,
             block_meta: meta.clone(),
@@ -169,7 +171,7 @@ impl SsTable {
             first_key: meta.first().unwrap().first_key.clone(),
             last_key: meta.last().unwrap().last_key.clone(),
             bloom: Some(bloom_filter),
-            max_ts: 0,
+            max_ts,
         })
     }
 

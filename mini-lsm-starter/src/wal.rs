@@ -43,7 +43,11 @@ impl Wal {
         })
     }
 
-    pub fn recover(path: impl AsRef<Path>, skiplist: &SkipMap<KeyBytes, Bytes>) -> Result<Self> {
+    pub fn recover(
+        path: impl AsRef<Path>,
+        skiplist: &SkipMap<KeyBytes, Bytes>,
+    ) -> Result<(Self, u64)> {
+        let mut last_commit_ts = 0;
         let mut buf = Vec::new();
         let mut file = OpenOptions::new()
             .read(true)
@@ -62,32 +66,38 @@ impl Wal {
             let value = Bytes::copy_from_slice(&buf[..value_len]);
             buf.advance(value_len);
             let checksum = buf.get_u32();
+            last_commit_ts = last_commit_ts.max(key.ts());
             skiplist.insert(key, value);
-
-            if checksum != crc32fast::hash(&start[..2 + key_len + 2 + value_len]) {
+            if checksum != crc32fast::hash(&start[..2 + key_len + 8 + 2 + value_len]) {
+                println!(
+                    "checksum mismatched for wal key-value, key: {:?}, value: {:?}",
+                    checksum,
+                    crc32fast::hash(&start[..2 + key_len + 8 + 2 + value_len])
+                );
                 bail!("checksum mismatched for wal key-value");
             }
         }
 
-        Ok(Self {
-            file: Arc::new(Mutex::new(BufWriter::new(file))),
-        })
+        Ok((
+            Self {
+                file: Arc::new(Mutex::new(BufWriter::new(file))),
+            },
+            last_commit_ts,
+        ))
     }
     pub fn put(&self, key: KeySlice, value: &[u8]) -> Result<()> {
         let len = std::mem::size_of::<u16>()
             + key.key_len()
             + std::mem::size_of::<u16>()
+            + std::mem::size_of::<u64>()
             + value.len()
-            + std::mem::size_of::<u32>()
-            + std::mem::size_of::<u64>();
+            + std::mem::size_of::<u32>();
         let mut buf = Vec::with_capacity(len);
 
-        let key_len = key.key_len();
-        buf.put_u16(key_len as u16);
+        buf.put_u16(key.key_len() as u16);
         buf.put_slice(key.key_ref());
         buf.put_u64(key.ts());
-        let value_len = value.len().try_into().unwrap();
-        buf.put_u16(value_len);
+        buf.put_u16(value.len() as u16);
         buf.put_slice(value);
 
         let checksum = crc32fast::hash(&buf);

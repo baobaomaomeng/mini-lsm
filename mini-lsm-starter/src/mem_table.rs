@@ -75,16 +75,19 @@ impl MemTable {
     }
 
     /// Create a memtable from WAL
-    pub fn recover_from_wal(id: usize, path: impl AsRef<Path>) -> Result<Self> {
+    pub fn recover_from_wal(id: usize, path: impl AsRef<Path>) -> Result<(Self, u64)> {
         let map = SkipMap::new();
-        let wal = Wal::recover(path, &map)?;
+        let (wal, last_commit_ts) = Wal::recover(path, &map)?;
 
-        Ok(Self {
-            map: Arc::new(map),
-            wal: Some(wal),
-            id: id,
-            approximate_size: Arc::new(AtomicUsize::new(0)),
-        })
+        Ok((
+            Self {
+                map: Arc::new(map),
+                wal: Some(wal),
+                id: id,
+                approximate_size: Arc::new(AtomicUsize::new(0)),
+            },
+            last_commit_ts,
+        ))
     }
 
     pub fn for_testing_put_slice(&self, key: &[u8], value: &[u8]) -> Result<()> {

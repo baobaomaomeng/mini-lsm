@@ -31,6 +31,7 @@ use crate::{
     iterators::{two_merge_iterator::TwoMergeIterator, StorageIterator},
     lsm_iterator::{FusedIterator, LsmIterator},
     lsm_storage::LsmStorageInner,
+    mem_table::map_bound,
 };
 
 pub struct Transaction {
@@ -44,11 +45,19 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn get(&self, key: &[u8]) -> Result<Option<Bytes>> {
-        unimplemented!()
+        self.inner.get_with_ts(key, self.read_ts)
     }
 
     pub fn scan(self: &Arc<Self>, lower: Bound<&[u8]>, upper: Bound<&[u8]>) -> Result<TxnIterator> {
-        unimplemented!()
+        let local_iter = TxnLocalIteratorBuilder {
+            map: self.local_storage.clone(),
+            iter_builder: |map| map.range((map_bound(lower), map_bound(upper))),
+            item: (Bytes::new(), Bytes::new()),
+        }
+        .build();
+        let lsm_iter = self.inner.scan_with_ts(lower, upper, self.read_ts)?;
+        let iter = TwoMergeIterator::create(local_iter, lsm_iter)?;
+        Ok(TxnIterator::create(self.clone(), iter)?)
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
@@ -87,24 +96,28 @@ impl StorageIterator for TxnLocalIterator {
     type KeyType<'a> = &'a [u8];
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.borrow_item().1.as_ref()
     }
 
     fn key(&self) -> &[u8] {
-        unimplemented!()
+        self.borrow_item().0.as_ref()
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        false
     }
 
     fn next(&mut self) -> Result<()> {
         unimplemented!()
     }
+
+    fn num_active_iterators(&self) -> usize {
+        unimplemented!()
+    }
 }
 
 pub struct TxnIterator {
-    _txn: Arc<Transaction>,
+    txn: Arc<Transaction>,
     iter: TwoMergeIterator<TxnLocalIterator, FusedIterator<LsmIterator>>,
 }
 
@@ -113,7 +126,7 @@ impl TxnIterator {
         txn: Arc<Transaction>,
         iter: TwoMergeIterator<TxnLocalIterator, FusedIterator<LsmIterator>>,
     ) -> Result<Self> {
-        unimplemented!()
+        Ok(Self { txn, iter })
     }
 }
 
