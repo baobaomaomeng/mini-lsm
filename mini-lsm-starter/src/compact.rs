@@ -136,16 +136,40 @@ impl LsmStorageInner {
 
         let mut result = Vec::new();
         let mut last_key = Vec::<u8>::new();
+        let watermark = self.mvcc.watermark();
+        let mut key_ts_below_watermark = false;
         while merge_iter.is_valid() {
             let key = merge_iter.key();
             let value = merge_iter.value();
             let same_as_last_key = merge_iter.key().key_ref() == last_key;
 
-            if !same_as_last_key {
+            //说明不是第一个key
+            if same_as_last_key{
+                if key_ts_below_watermark{
+                    merge_iter.next().unwrap();
+                    continue;
+                }
+                if !key_ts_below_watermark && key.ts() <= watermark{
+                    key_ts_below_watermark = true;
+                }
+            } else {
+                //说明是第一个key
+                //首先更新last_key
                 last_key.clear();
                 last_key.extend(merge_iter.key().key_ref());
+                if key.ts() <= watermark {
+                    key_ts_below_watermark = true;
+                } else {
+                    key_ts_below_watermark = false;
+                }
             }
 
+            if key_ts_below_watermark && value.is_empty() {
+                merge_iter.next().unwrap();
+                continue;
+            }
+
+            println!("key: {:?}, value: {:?}", key.key_ref(), value);
             builder.add(key, value);
             merge_iter.next().unwrap();
             // 超出限制，若超出限制则生成SST

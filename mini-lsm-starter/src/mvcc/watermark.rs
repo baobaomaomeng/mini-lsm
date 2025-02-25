@@ -15,24 +15,49 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::collections::BTreeMap;
+use std::collections::{HashMap, VecDeque};
 
 pub struct Watermark {
-    readers: BTreeMap<u64, usize>,
+    dequeue: VecDeque<u64>,
+    nums:HashMap<u64, usize>
 }
 
 impl Watermark {
     pub fn new() -> Self {
         Self {
-            readers: BTreeMap::new(),
+            dequeue: VecDeque::new(),
+            nums: HashMap::new(),
         }
     }
 
-    pub fn add_reader(&mut self, ts: u64) {}
+    pub fn add_reader(&mut self, ts: u64) {
+        if let Some(cnt) = self.nums.get_mut(&ts) {
+            *cnt += 1;
+        } else {
+            self.nums.insert(ts, 1);
+        }
+        self.dequeue.push_back(ts);
+    }
 
-    pub fn remove_reader(&mut self, ts: u64) {}
+    pub fn remove_reader(&mut self, ts: u64) {
+        if let Some(cnt) = self.nums.get_mut(&ts) {
+            *cnt -= 1;
+            if *cnt == 0 {
+                self.nums.remove(&ts);
+                self.dequeue.pop_front();
+            }
+        }
+    }
 
     pub fn watermark(&self) -> Option<u64> {
-        Some(0)
+        if self.dequeue.is_empty() {
+            None
+        } else {
+            Some(*self.dequeue.front().unwrap())
+        }
+    }
+    
+    pub fn num_retained_snapshots(&self) -> usize {
+        self.nums.len()
     }
 }

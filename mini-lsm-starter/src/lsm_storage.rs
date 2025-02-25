@@ -39,7 +39,7 @@ use crate::key::{self, KeySlice};
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::{Manifest, ManifestRecord};
 use crate::mem_table::{map_bound, map_key_bound_plus_ts, MemTable};
-use crate::mvcc::txn::TxnIterator;
+use crate::mvcc::txn::{Transaction, TxnIterator};
 use crate::mvcc::LsmMvccInner;
 use crate::table::{FileObject, SsTable, SsTableIterator};
 
@@ -233,7 +233,7 @@ impl MiniLsm {
         }))
     }
 
-    pub fn new_txn(&self) -> Result<()> {
+    pub fn new_txn(&self) -> Result<Arc<Transaction>> {
         self.inner.new_txn()
     }
 
@@ -439,7 +439,7 @@ impl LsmStorageInner {
     }
 
     pub fn get<'a>(self: &'a Arc<Self>, key: &[u8]) -> Result<Option<Bytes>> {
-        let txn = self.mvcc.new_txn(self.clone(), self.options.serializable);
+        let txn = self.new_txn()?;
         txn.get(key)
     }
 
@@ -660,9 +660,8 @@ impl LsmStorageInner {
         Ok(())
     }
 
-    pub fn new_txn(&self) -> Result<()> {
-        // no-op
-        Ok(())
+    pub fn new_txn(self: &Arc<Self>) -> Result<Arc<Transaction>> {
+        Ok(self.mvcc.new_txn(self.clone(), self.options.serializable))
     }
 
     pub fn scan<'a>(
@@ -670,7 +669,7 @@ impl LsmStorageInner {
         lower: Bound<&[u8]>,
         upper: Bound<&[u8]>,
     ) -> Result<TxnIterator> {
-        let txn = self.mvcc.new_txn(self.clone(), self.options.serializable);
+        let txn = self.new_txn()?;
         txn.scan(lower, upper)
     }
 
