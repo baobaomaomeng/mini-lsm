@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
-#![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
-
 use std::collections::{HashMap, VecDeque};
 
 pub struct Watermark {
     dequeue: VecDeque<u64>,
-    nums:HashMap<u64, usize>
+    nums: HashMap<u64, usize>,
 }
 
 impl Watermark {
@@ -44,7 +41,9 @@ impl Watermark {
             *cnt -= 1;
             if *cnt == 0 {
                 self.nums.remove(&ts);
-                self.dequeue.pop_front();
+                while self.dequeue.len() > 0 && !self.nums.contains_key(&self.dequeue[0]) {
+                    self.dequeue.pop_front();
+                }
             }
         }
     }
@@ -56,7 +55,7 @@ impl Watermark {
             Some(*self.dequeue.front().unwrap())
         }
     }
-    
+
     pub fn num_retained_snapshots(&self) -> usize {
         self.nums.len()
     }

@@ -9,7 +9,7 @@ use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
 
 use crate::iterators::StorageIterator;
-use crate::key::{KeyBytes, KeySlice, TS_DEFAULT};
+use crate::key::{self, KeyBytes, KeySlice, TS_DEFAULT};
 use crate::table::SsTableBuilder;
 use crate::wal::Wal;
 
@@ -41,7 +41,7 @@ pub(crate) fn map_key_bound(bound: Bound<KeySlice>) -> Bound<KeyBytes> {
 pub(crate) fn map_key_bound_plus_ts(bound: Bound<&[u8]>, ts: u64) -> Bound<KeySlice> {
     match bound {
         Bound::Included(x) => Bound::Included(KeySlice::from_slice(x, ts)),
-        Bound::Excluded(x) => Bound::Excluded(KeySlice::from_slice(x, ts)),
+        Bound::Excluded(x) => Bound::Excluded(KeySlice::from_slice(x, key::TS_RANGE_END)),
         Bound::Unbounded => Bound::Unbounded,
     }
 }
@@ -139,9 +139,21 @@ impl MemTable {
         Ok(())
     }
 
-    /// Implement this in week 3, day 5.
-    pub fn put_batch(&self, _data: &[(KeySlice, &[u8])]) -> Result<()> {
-        unimplemented!()
+    pub fn put_batch(&self, data: &[(KeySlice, &[u8])]) -> Result<()> {
+        let mut estimated_size = 0;
+        for (key, value) in data {
+            estimated_size += key.raw_len() + value.len();
+            self.map.insert(
+                key.to_key_vec().into_key_bytes(),
+                Bytes::copy_from_slice(value),
+            );
+        }
+        self.approximate_size
+            .fetch_add(estimated_size, std::sync::atomic::Ordering::Relaxed);
+        if let Some(ref wal) = self.wal {
+            wal.put_batch(data)?;
+        }
+        Ok(())
     }
 
     ///刷新自身

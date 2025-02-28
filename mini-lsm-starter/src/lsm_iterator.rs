@@ -92,6 +92,7 @@ impl StorageIterator for LsmIterator {
                 break;
             }
             if self.inner.value().is_empty() || self.inner.key().ts() > self.read_ts {
+                self.prev_key = self.key().to_vec();
                 continue;
             }
             if self.prev_key != self.key().to_vec() {

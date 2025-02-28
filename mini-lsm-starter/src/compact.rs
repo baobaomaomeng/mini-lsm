@@ -144,12 +144,12 @@ impl LsmStorageInner {
             let same_as_last_key = merge_iter.key().key_ref() == last_key;
 
             //说明不是第一个key
-            if same_as_last_key{
-                if key_ts_below_watermark{
+            if same_as_last_key {
+                if key_ts_below_watermark {
                     merge_iter.next().unwrap();
                     continue;
                 }
-                if !key_ts_below_watermark && key.ts() <= watermark{
+                if !key_ts_below_watermark && key.ts() <= watermark {
                     key_ts_below_watermark = true;
                 }
             } else {

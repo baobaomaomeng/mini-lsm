@@ -24,6 +24,7 @@ use crossbeam_skiplist::SkipMap;
 use parking_lot::Mutex;
 
 use crate::key::{KeyBytes, KeySlice};
+use crate::lsm_storage::WriteBatchRecord;
 
 pub struct Wal {
     file: Arc<Mutex<BufWriter<File>>>,
@@ -111,9 +112,24 @@ impl Wal {
         Ok(())
     }
 
-    /// Implement this in week 3, day 5.
-    pub fn put_batch(&self, _data: &[(&[u8], &[u8])]) -> Result<()> {
-        unimplemented!()
+    pub fn put_batch(&self, data: &[(KeySlice, &[u8])]) -> Result<()> {
+        let mut file = self.file.lock();
+        let mut buf = Vec::<u8>::new();
+        for (key, value) in data {
+            buf.put_u16(key.key_len() as u16);
+            buf.put_slice(key.key_ref());
+            buf.put_u64(key.ts());
+            buf.put_u16(value.len() as u16);
+            buf.put_slice(value);
+        }
+        // write batch_size header (u32)
+        file.write_all(&(buf.len() as u32).to_be_bytes())?;
+        // write key-value pairs body
+        file.write_all(&buf)?;
+        // write checksum (u32)
+        file.write_all(&crc32fast::hash(&buf).to_be_bytes())?;
+        self.sync()?;
+        Ok(())
     }
 
     pub fn sync(&self) -> Result<()> {
