@@ -51,9 +51,17 @@ impl LsmIterator {
             read_ts,
         };
         if lsm.is_valid() {
-            lsm.prev_key = lsm.key().to_vec();
-            if lsm.value().is_empty() || lsm.inner.key().ts() > read_ts {
+            if lsm.value().is_empty() {
+                lsm.prev_key = lsm.key().to_vec();
                 let _ = lsm.next();
+            }
+
+            if lsm.inner.key().ts() > read_ts {
+                let _ = lsm.next();
+            }
+
+            if lsm.is_valid() {
+                lsm.prev_key = lsm.key().to_vec();
             }
         }
         Ok(lsm)
@@ -91,8 +99,11 @@ impl StorageIterator for LsmIterator {
             if !self.inner.is_valid() {
                 break;
             }
-            if self.inner.value().is_empty() || self.inner.key().ts() > self.read_ts {
+            if self.inner.value().is_empty() {
                 self.prev_key = self.key().to_vec();
+                continue;
+            }
+            if self.inner.key().ts() > self.read_ts {
                 continue;
             }
             if self.prev_key != self.key().to_vec() {

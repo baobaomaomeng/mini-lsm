@@ -181,7 +181,12 @@ where
         );
         iter.next().unwrap();
     }
-    assert!(!iter.is_valid());
+    assert!(
+        !iter.is_valid(),
+        "iter.key(): {:?}, iter.value(): {:?}",
+        iter.key(),
+        iter.value()
+    );
 }
 
 pub fn expect_iter_error(mut iter: impl StorageIterator) {
